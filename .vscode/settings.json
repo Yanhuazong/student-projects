@@ -1,0 +1,13 @@
+{
+  "task.allowAutomaticTasks": "off",
+  "npm.autoDetect": "off",
+  "typescript.tsc.autoDetect": "off",
+  "grunt.autoDetect": "off",
+  "gulp.autoDetect": "off",
+  "jake.autoDetect": "off",
+  "github.copilot.chat.backgroundAgent.enabled": false,
+  "github.copilot.chat.claudeAgent.enabled": false,
+  "github.copilot.chat.cloudAgent.enabled": false,
+  "terminal.integrated.enablePersistentSessions": false,
+  "terminal.integrated.hideOnStartup": "always"
+}

@@ -1,0 +1,16 @@
+<IfModule mod_rewrite.c>
+RewriteEngine On
+RewriteBase /student-projects/
+
+# Keep backend/API and uploaded files out of SPA fallback.
+RewriteRule ^api/ - [L]
+RewriteRule ^uploads/ - [L]
+
+# Serve existing files/directories directly.
+RewriteCond %{REQUEST_FILENAME} -f [OR]
+RewriteCond %{REQUEST_FILENAME} -d
+RewriteRule ^ - [L]
+
+# SPA fallback for class routes like /student-projects/cgt270.
+RewriteRule ^ index.html [L]
+</IfModule>

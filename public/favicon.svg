@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Student Projects favicon">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#d1653c" />
+      <stop offset="100%" stop-color="#4c6956" />
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#bg)" />
+  <path d="M17 26.5L32 19l15 7.5-15 7.5-15-7.5zm5.5 7.2L32 38l9.5-4.3V40L32 45l-9.5-5z" fill="#fff8ef" />
+</svg>

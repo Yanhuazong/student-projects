@@ -64,7 +64,7 @@ function auth_login()
         json_response(array('error' => 'Invalid email or password.'), 401);
     }
 
-    if ($user['role'] === 'manager') {
+    if ($user['role'] === 'manager' || $user['role'] === 'user') {
         $activeClass = resolve_active_class($pdo);
 
         if ((int) $user['class_id'] !== (int) $activeClass['id']) {
@@ -89,7 +89,7 @@ function auth_login()
 
 function auth_me()
 {
-    $user = require_auth(array('admin', 'manager'));
+    $user = require_auth(array('admin', 'manager', 'user'));
 
     json_response(
         array(

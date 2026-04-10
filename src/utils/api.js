@@ -2,6 +2,13 @@ import { appendClassSlug } from './classRouting';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '/api';
 
+export function resolveImageUrl(imageUrl) {
+  if (!imageUrl) return '';
+  if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) return imageUrl;
+  if (imageUrl.startsWith('/uploads/')) return `${API_BASE}${imageUrl}`;
+  return imageUrl;
+}
+
 export async function apiRequest(path, options = {}) {
   const {
     body,
@@ -24,10 +31,29 @@ export async function apiRequest(path, options = {}) {
     body: body ? (isFormData ? body : JSON.stringify(body)) : undefined,
   });
 
-  const data = await response.json().catch(() => ({}));
+  const contentType = response.headers.get('content-type') || '';
+  const isJsonResponse = contentType.includes('application/json');
+  const data = isJsonResponse ? await response.json().catch(() => ({})) : {};
+  const responseText = !isJsonResponse ? await response.text().catch(() => '') : '';
 
   if (!response.ok) {
-    throw new Error(data.error || 'Request failed.');
+    const plainTextMessage = responseText
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 220);
+
+    const message =
+      data.error ||
+      data.message ||
+      plainTextMessage ||
+      `Request failed (HTTP ${response.status}).`;
+
+    const detailText = data.details
+      ? ` ${typeof data.details === 'string' ? data.details : JSON.stringify(data.details)}`
+      : '';
+
+    throw new Error(`${message}${detailText} (HTTP ${response.status})`);
   }
 
   return data;

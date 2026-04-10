@@ -2,6 +2,7 @@
 
 require_once dirname(__DIR__) . '/config/database.php';
 require_once dirname(__DIR__) . '/controllers/classes.php';
+require_once dirname(__DIR__) . '/controllers/vote_categories.php';
 require_once dirname(__DIR__) . '/middleware/auth.php';
 require_once dirname(__DIR__) . '/utils/response.php';
 
@@ -51,13 +52,122 @@ function fetch_site_settings($pdo, $classId = null)
     return $defaults;
 }
 
+function normalize_admin_vote_categories_input($categoriesInput)
+{
+    if (!is_array($categoriesInput) || count($categoriesInput) !== 4) {
+        json_response(array('error' => 'Exactly four vote categories are required.'), 422);
+    }
+
+    $normalized = array();
+
+    foreach ($categoriesInput as $index => $entry) {
+        if (!is_array($entry)) {
+            json_response(array('error' => 'Each vote category must be an object.'), 422);
+        }
+
+        $name = isset($entry['name']) ? trim($entry['name']) : '';
+        $icon = isset($entry['icon']) ? trim($entry['icon']) : '';
+        $id = isset($entry['id']) ? (int) $entry['id'] : 0;
+
+        if ($name === '' || $icon === '') {
+            json_response(array('error' => 'Each vote category requires a name and icon.'), 422);
+        }
+
+        $normalized[] = array(
+            'id' => $id,
+            'name' => $name,
+            'slug' => normalize_slug($name),
+            'icon' => $icon,
+            'display_order' => $index + 1,
+            'is_primary' => $index === 0 ? 1 : 0,
+            'is_active' => 1,
+        );
+    }
+
+    return $normalized;
+}
+
+function save_vote_categories($pdo, $classId, $categories)
+{
+    $pdo->beginTransaction();
+
+    try {
+        $existingById = array();
+        $existingRows = get_vote_categories_for_class($pdo, $classId, true);
+
+        foreach ($existingRows as $existingRow) {
+            $existingById[(int) $existingRow['id']] = $existingRow;
+        }
+
+        $keptIds = array();
+        $updateStatement = $pdo->prepare(
+            'UPDATE vote_categories
+             SET name = ?, slug = ?, icon = ?, display_order = ?, is_primary = ?, is_active = 1
+             WHERE id = ? AND class_id = ?'
+        );
+        $insertStatement = $pdo->prepare(
+            'INSERT INTO vote_categories (class_id, name, slug, icon, display_order, is_primary, is_active)
+             VALUES (?, ?, ?, ?, ?, ?, 1)'
+        );
+
+        foreach ($categories as $category) {
+            if ($category['id'] > 0 && isset($existingById[$category['id']])) {
+                $updateStatement->execute(
+                    array(
+                        $category['name'],
+                        $category['slug'],
+                        $category['icon'],
+                        (int) $category['display_order'],
+                        (int) $category['is_primary'],
+                        (int) $category['id'],
+                        (int) $classId,
+                    )
+                );
+                $keptIds[] = (int) $category['id'];
+                continue;
+            }
+
+            $insertStatement->execute(
+                array(
+                    (int) $classId,
+                    $category['name'],
+                    $category['slug'],
+                    $category['icon'],
+                    (int) $category['display_order'],
+                    (int) $category['is_primary'],
+                )
+            );
+            $keptIds[] = (int) $pdo->lastInsertId();
+        }
+
+        if (count($keptIds) > 0) {
+            $placeholders = implode(',', array_fill(0, count($keptIds), '?'));
+            $disableStatement = $pdo->prepare(
+                'UPDATE vote_categories
+                 SET is_active = 0, is_primary = 0
+                 WHERE class_id = ? AND id NOT IN (' . $placeholders . ')'
+            );
+            $disableStatement->execute(array_merge(array((int) $classId), $keptIds));
+        }
+
+        $pdo->commit();
+    } catch (Exception $exception) {
+        if ($pdo->inTransaction()) {
+            $pdo->rollBack();
+        }
+
+        throw $exception;
+    }
+}
+
 function public_settings()
 {
     $pdo = get_pdo();
     $class = resolve_active_class($pdo);
     $settings = fetch_site_settings($pdo, $class['id']);
+    $voteCategories = get_vote_categories_for_class($pdo, $class['id']);
 
-    json_response(array('class' => $class, 'settings' => $settings), 200);
+    json_response(array('class' => $class, 'settings' => $settings, 'vote_categories' => $voteCategories), 200);
 }
 
 function admin_settings()
@@ -66,8 +176,9 @@ function admin_settings()
     $pdo = get_pdo();
     $class = resolve_active_class($pdo, array('allow_inactive' => true));
     $settings = fetch_site_settings($pdo, $class['id']);
+    $voteCategories = get_vote_categories_for_class($pdo, $class['id'], true);
 
-    json_response(array('class' => $class, 'settings' => $settings), 200);
+    json_response(array('class' => $class, 'settings' => $settings, 'vote_categories' => $voteCategories), 200);
 }
 
 function update_admin_settings()
@@ -75,7 +186,7 @@ function update_admin_settings()
     require_auth(array('admin'));
     $pdo = get_pdo();
     $input = read_json_body();
-    require_fields($input, array('site_logo_text', 'home_heading'));
+    require_fields($input, array('site_logo_text', 'home_heading', 'vote_categories'));
 
     $logoText = trim($input['site_logo_text']);
     $homeHeading = trim($input['home_heading']);
@@ -85,14 +196,18 @@ function update_admin_settings()
         json_response(array('error' => 'Site logo text and home heading are required.'), 422);
     }
 
+    $normalizedCategories = normalize_admin_vote_categories_input($input['vote_categories']);
+
     upsert_class_setting($pdo, $class['id'], 'site_logo_text', $logoText);
     upsert_class_setting($pdo, $class['id'], 'home_heading', $homeHeading);
+    save_vote_categories($pdo, $class['id'], $normalizedCategories);
 
     json_response(
         array(
             'message' => 'Site settings updated.',
             'class' => $class,
             'settings' => fetch_site_settings($pdo, $class['id']),
+            'vote_categories' => get_vote_categories_for_class($pdo, $class['id'], true),
         ),
         200
     );

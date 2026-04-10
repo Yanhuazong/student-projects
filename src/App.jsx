@@ -14,6 +14,7 @@ function AppHeader() {
   const location = useLocation();
   const [logoText, setLogoText] = useState('Student Projects');
   const activeClassSlug = getActiveClassSlug(location.pathname);
+  const canAccessDashboard = user && (user.role === 'admin' || user.role === 'manager');
 
   useEffect(() => {
     let cancelled = false;
@@ -44,7 +45,7 @@ function AppHeader() {
         </Link>
         <nav className="site-nav">
           <Link to={buildClassPath('/', activeClassSlug)}>Projects</Link>
-          {user ? (
+          {canAccessDashboard ? (
             <Link to={buildClassPath('/dashboard', activeClassSlug)}>Dashboard</Link>
           ) : (
             <Link to={buildClassPath('/login', activeClassSlug)}>Login</Link>
@@ -92,7 +93,7 @@ export default function App() {
         <Route
           path={buildClassRoute('/dashboard')}
           element={
-            <ProtectedRoute>
+            <ProtectedRoute allowedRoles={['admin', 'manager']}>
               <DashboardPage />
             </ProtectedRoute>
           }

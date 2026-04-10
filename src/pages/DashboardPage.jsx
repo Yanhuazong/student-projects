@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import RichTextEditor from '../components/RichTextEditor';
 import { useAuth } from '../contexts/AuthContext';
-import { apiRequest } from '../utils/api';
+import { apiRequest, resolveImageUrl } from '../utils/api';
 
 const emptySemesterForm = {
   name: '',
@@ -21,7 +21,22 @@ const emptyUserForm = {
 const emptySiteSettingsForm = {
   site_logo_text: 'Student Projects',
   home_heading: 'Top-rated project stories across every semester.',
+  vote_categories: [
+    { id: 0, name: 'Best Overall', icon: 'trophy' },
+    { id: 0, name: 'Most Creative', icon: 'palette' },
+    { id: 0, name: 'Best Technical Execution', icon: 'gear' },
+    { id: 0, name: 'Audience Choice', icon: 'spark' },
+  ],
 };
+
+const voteCategoryIconOptions = [
+  { value: 'trophy', label: 'Trophy' },
+  { value: 'palette', label: 'Palette' },
+  { value: 'gear', label: 'Gear' },
+  { value: 'spark', label: 'Spark' },
+  { value: 'star', label: 'Star' },
+  { value: 'rocket', label: 'Rocket' },
+];
 
 const emptyProjectForm = {
   id: null,
@@ -45,6 +60,20 @@ function generateSlug(value) {
     .replace(/[^a-z0-9\s-]/g, '')
     .replace(/\s+/g, '-')
     .replace(/-+/g, '-');
+}
+
+function normalizeVoteCategoriesForForm(categories) {
+  const normalized = (categories || []).slice(0, 4).map((category, index) => ({
+    id: Number(category.id || 0),
+    name: category.name || emptySiteSettingsForm.vote_categories[index].name,
+    icon: category.icon || emptySiteSettingsForm.vote_categories[index].icon,
+  }));
+
+  while (normalized.length < 4) {
+    normalized.push({ ...emptySiteSettingsForm.vote_categories[normalized.length] });
+  }
+
+  return normalized;
 }
 
 export default function DashboardPage() {
@@ -92,6 +121,7 @@ export default function DashboardPage() {
           setSiteSettingsForm({
             site_logo_text: responses[3].settings?.site_logo_text || emptySiteSettingsForm.site_logo_text,
             home_heading: responses[3].settings?.home_heading || emptySiteSettingsForm.home_heading,
+            vote_categories: normalizeVoteCategoriesForForm(responses[3].vote_categories),
           });
         }
       } catch (requestError) {
@@ -155,6 +185,16 @@ export default function DashboardPage() {
     setError('');
     setMessage('');
 
+    const descriptionText = projectForm.description_html
+      .replace(/<[^>]*>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .trim();
+
+    if (!descriptionText) {
+      setError('Description is required before saving a project.');
+      return;
+    }
+
     try {
       const payload = {
         ...projectForm,
@@ -167,8 +207,8 @@ export default function DashboardPage() {
       };
 
       if (projectForm.id) {
-        await apiRequest(`/dashboard/projects/${projectForm.id}`, {
-          method: 'PUT',
+        await apiRequest(`/dashboard/projects/${projectForm.id}/update`, {
+          method: 'POST',
           body: payload,
           token,
         });
@@ -198,8 +238,8 @@ export default function DashboardPage() {
     setMessage('');
 
     try {
-      await apiRequest(`/dashboard/projects/${projectId}`, {
-        method: 'DELETE',
+      await apiRequest(`/dashboard/projects/${projectId}/delete`, {
+        method: 'POST',
         token,
       });
       setMessage('Project deleted.');
@@ -261,6 +301,7 @@ export default function DashboardPage() {
       setSiteSettingsForm({
         site_logo_text: response.settings?.site_logo_text || emptySiteSettingsForm.site_logo_text,
         home_heading: response.settings?.home_heading || emptySiteSettingsForm.home_heading,
+        vote_categories: normalizeVoteCategoriesForForm(response.vote_categories),
       });
       setMessage('Site text updated. Refresh the homepage to see changes.');
     } catch (requestError) {
@@ -397,6 +438,7 @@ export default function DashboardPage() {
                   Password
                   <input
                     type="password"
+                    autoComplete="new-password"
                     value={userForm.password}
                     onChange={(event) => setUserForm({ ...userForm, password: event.target.value })}
                     required
@@ -409,6 +451,7 @@ export default function DashboardPage() {
                     onChange={(event) => setUserForm({ ...userForm, role: event.target.value })}
                   >
                     <option value="manager">Project manager</option>
+                    <option value="user">Regular user</option>
                     <option value="admin">Admin</option>
                   </select>
                 </label>
@@ -441,6 +484,33 @@ export default function DashboardPage() {
                     required
                   />
                 </label>
+                {siteSettingsForm.vote_categories.map((category, index) => (
+                  <div key={index} className="stack-form__field">
+                    <span>{index === 0 ? 'Primary vote category (Best Overall section)' : `Vote category ${index + 1}`}</span>
+                    <input
+                      type="text"
+                      value={category.name}
+                      onChange={(event) => {
+                        const updated = [...siteSettingsForm.vote_categories];
+                        updated[index] = { ...updated[index], name: event.target.value };
+                        setSiteSettingsForm({ ...siteSettingsForm, vote_categories: updated });
+                      }}
+                      required
+                    />
+                    <select
+                      value={category.icon}
+                      onChange={(event) => {
+                        const updated = [...siteSettingsForm.vote_categories];
+                        updated[index] = { ...updated[index], icon: event.target.value };
+                        setSiteSettingsForm({ ...siteSettingsForm, vote_categories: updated });
+                      }}
+                    >
+                      {voteCategoryIconOptions.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </div>
+                ))}
                 <button type="submit" className="secondary-button">Save text</button>
               </form>
             </div>
@@ -583,7 +653,7 @@ export default function DashboardPage() {
             <div>
               <small>Featured image preview</small>
               <img
-                src={projectForm.image_url}
+                src={resolveImageUrl(projectForm.image_url)}
                 alt="Featured preview"
                 style={{ marginTop: '8px', width: '100%', maxWidth: '480px', height: 'auto', border: '1px solid var(--line)' }}
               />

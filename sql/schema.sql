@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS users (
   name VARCHAR(120) NOT NULL,
   email VARCHAR(190) NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
-  role ENUM('admin', 'manager') NOT NULL DEFAULT 'manager',
+  role ENUM('admin', 'manager', 'user') NOT NULL DEFAULT 'manager',
   is_active TINYINT(1) NOT NULL DEFAULT 1,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -80,6 +80,43 @@ CREATE TABLE IF NOT EXISTS favorites (
   CONSTRAINT fk_favorites_project FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS vote_categories (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  class_id INT UNSIGNED NOT NULL,
+  name VARCHAR(120) NOT NULL,
+  slug VARCHAR(120) NOT NULL,
+  icon VARCHAR(40) NOT NULL,
+  display_order INT NOT NULL DEFAULT 0,
+  is_primary TINYINT(1) NOT NULL DEFAULT 0,
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uniq_vote_category_class_slug (class_id, slug),
+  KEY idx_vote_categories_class_order (class_id, is_active, display_order),
+  CONSTRAINT fk_vote_categories_class FOREIGN KEY (class_id) REFERENCES classes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS project_votes (
+  id INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  class_id INT UNSIGNED NOT NULL,
+  semester_id INT UNSIGNED NOT NULL,
+  project_id INT UNSIGNED NOT NULL,
+  category_id INT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uniq_vote_per_user_category (semester_id, user_id, category_id),
+  KEY idx_project_votes_project_category (project_id, category_id),
+  KEY idx_project_votes_semester_category (semester_id, category_id),
+  KEY idx_project_votes_class (class_id),
+  CONSTRAINT fk_project_votes_class FOREIGN KEY (class_id) REFERENCES classes (id) ON DELETE CASCADE,
+  CONSTRAINT fk_project_votes_semester FOREIGN KEY (semester_id) REFERENCES semesters (id) ON DELETE CASCADE,
+  CONSTRAINT fk_project_votes_project FOREIGN KEY (project_id) REFERENCES projects (id) ON DELETE CASCADE,
+  CONSTRAINT fk_project_votes_category FOREIGN KEY (category_id) REFERENCES vote_categories (id) ON DELETE CASCADE,
+  CONSTRAINT fk_project_votes_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS site_settings (
   setting_key VARCHAR(120) NOT NULL,
   setting_value TEXT NOT NULL,
@@ -109,6 +146,23 @@ SELECT 'CGT370', 'cgt370', 'Student project showcase for CGT370.', 1, 3
 WHERE NOT EXISTS (SELECT 1 FROM classes WHERE slug = 'cgt370');
 
 SET @class_cgt390 = (SELECT id FROM classes WHERE slug = 'cgt390' LIMIT 1);
+
+SET @users_role_supports_regular_user = (
+  SELECT COUNT(*)
+  FROM information_schema.columns
+  WHERE table_schema = DATABASE()
+    AND table_name = 'users'
+    AND column_name = 'role'
+    AND column_type LIKE "%\\'user\\'%"
+);
+SET @expand_users_role_enum_sql = IF(
+  @users_role_supports_regular_user = 0,
+  'ALTER TABLE users MODIFY COLUMN role ENUM(\'admin\', \'manager\', \'user\') NOT NULL DEFAULT \'manager\'',
+  'SELECT 1'
+);
+PREPARE expand_users_role_enum_statement FROM @expand_users_role_enum_sql;
+EXECUTE expand_users_role_enum_statement;
+DEALLOCATE PREPARE expand_users_role_enum_statement;
 
 SET @has_users_class_id = (
   SELECT COUNT(*)
@@ -304,6 +358,42 @@ WHERE @class_cgt390 IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 FROM class_settings WHERE class_id = @class_cgt390 AND setting_key = 'home_heading'
   );
+
+INSERT INTO vote_categories (class_id, name, slug, icon, display_order, is_primary, is_active)
+SELECT c.id, 'Best Overall', 'best-overall', 'trophy', 1, 1, 1
+FROM classes c
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM vote_categories vc
+  WHERE vc.class_id = c.id AND vc.slug = 'best-overall'
+);
+
+INSERT INTO vote_categories (class_id, name, slug, icon, display_order, is_primary, is_active)
+SELECT c.id, 'Most Creative', 'most-creative', 'palette', 2, 0, 1
+FROM classes c
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM vote_categories vc
+  WHERE vc.class_id = c.id AND vc.slug = 'most-creative'
+);
+
+INSERT INTO vote_categories (class_id, name, slug, icon, display_order, is_primary, is_active)
+SELECT c.id, 'Best Technical Execution', 'best-technical-execution', 'gear', 3, 0, 1
+FROM classes c
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM vote_categories vc
+  WHERE vc.class_id = c.id AND vc.slug = 'best-technical-execution'
+);
+
+INSERT INTO vote_categories (class_id, name, slug, icon, display_order, is_primary, is_active)
+SELECT c.id, 'Audience Choice', 'audience-choice', 'spark', 4, 0, 1
+FROM classes c
+WHERE NOT EXISTS (
+  SELECT 1
+  FROM vote_categories vc
+  WHERE vc.class_id = c.id AND vc.slug = 'audience-choice'
+);
 
 INSERT INTO semesters (class_id, name, slug, starts_on, ends_on, is_current)
 SELECT @class_cgt390, 'Fall 2024', 'fall-2024', '2024-08-15', '2024-12-15', 0

@@ -44,7 +44,11 @@ export default function LoginPage() {
   }, []);
 
   if (user) {
-    return <Navigate to={location.state?.from || buildClassPath('/dashboard', activeClassSlug)} replace />;
+    const fallbackPath = user.role === 'admin' || user.role === 'manager'
+      ? buildClassPath('/dashboard', activeClassSlug)
+      : buildClassPath('/', activeClassSlug);
+
+    return <Navigate to={location.state?.from || fallbackPath} replace />;
   }
 
   async function handleLoginSubmit(event) {
@@ -79,13 +83,14 @@ export default function LoginPage() {
   return (
     <main className="page-shell auth-layout">
       <section className="auth-panel">
-        <p className="eyebrow">Management access</p>
-        <h1>Sign in to edit projects.</h1>
+        <p className="eyebrow">Account access</p>
+        <h1>Sign in to vote or manage projects.</h1>
         <form className="stack-form" onSubmit={handleLoginSubmit}>
           <label>
             Email
             <input
               type="email"
+              autoComplete="email"
               value={loginForm.email}
               onChange={(event) => setLoginForm({ ...loginForm, email: event.target.value })}
               required
@@ -95,6 +100,7 @@ export default function LoginPage() {
             Password
             <input
               type="password"
+              autoComplete="current-password"
               value={loginForm.password}
               onChange={(event) => setLoginForm({ ...loginForm, password: event.target.value })}
               required
@@ -133,6 +139,7 @@ export default function LoginPage() {
               Password
               <input
                 type="password"
+                autoComplete="new-password"
                 value={bootstrapForm.password}
                 onChange={(event) => setBootstrapForm({ ...bootstrapForm, password: event.target.value })}
                 required

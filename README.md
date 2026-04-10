@@ -4,14 +4,16 @@ A full-stack student project showcase and management system built with React, PH
 
 ## Features
 
-- Public homepage with top-rated projects across all semesters (up to 9)
+- Public homepage with top-rated projects by category for the current semester
 - Semester switcher for browsing each semester
 - Dedicated detail page for each project
 - Admin users who manage all semesters, projects, and users
 - Project managers who manage only their own project entries
+- Regular users who sign in to vote on projects
 - Rich text editor for project descriptions
 - Admin-editable site logo and homepage heading text
-- One-device up to 3 likes in the current semester, with toggle-to-unlike
+- Admin-editable 4 voting categories (first category is primary / Best Overall)
+- One signed-in user can cast one vote per category in the current semester
 
 ## Project Structure
 
@@ -95,12 +97,17 @@ Open `http://localhost:3000`.
 
 The first time the app starts, there will be no admin account. The login screen exposes a bootstrap form only while there are zero admins in the database. Use it once to create the initial admin.
 
-## Like Rules
+## Voting Rules
 
-- Likes are available only while viewing the current semester
-- Each device can like up to 3 projects in the current semester
-- Clicking the heart again removes a like
-- Likes are tracked with a locally stored device token and enforced in MySQL
+- Voting is available only while viewing the current semester
+- Users must sign in before voting
+- There are always 4 categories per class
+- The first category is the primary Best Overall section and returns one winner on Top-rated
+- For the other categories, Top-rated shows:
+	- up to 3 projects if total projects in semester is above 20
+	- up to 2 projects if total projects in semester is 10 to 20
+	- 1 project if total projects in semester is below 10
+- Each user can vote for only one project per category (and can switch or remove that vote)
 
 ## Demo Seed Data
 

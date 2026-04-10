@@ -67,8 +67,20 @@ if ($path === '' || $path === false) {
 $method = $_SERVER['REQUEST_METHOD'];
 
 if ($method === 'GET' && preg_match('#^/uploads/projects/([a-zA-Z0-9._-]+)$#', $path, $matches)) {
-    $uploadsRoot = dirname(__DIR__) . '/public/uploads/projects';
-    send_uploaded_file($uploadsRoot . '/' . $matches[1]);
+    $uploadFileName = $matches[1];
+    $uploadsRoots = array(
+        dirname(__DIR__) . '/public/uploads/projects',
+        dirname(__DIR__) . '/uploads/projects',
+    );
+
+    foreach ($uploadsRoots as $uploadsRoot) {
+        $candidate = $uploadsRoot . '/' . $uploadFileName;
+        if (is_file($candidate)) {
+            send_uploaded_file($candidate);
+        }
+    }
+
+    json_response(array('error' => 'File not found.'), 404);
 }
 
 if ($method === 'GET' && $path === '/') {
@@ -151,6 +163,10 @@ if ($method === 'POST' && preg_match('#^/projects/(\d+)/favorite$#', $path, $mat
     toggle_project_like((int) $matches[1]);
 }
 
+if ($method === 'POST' && preg_match('#^/projects/(\d+)/vote$#', $path, $matches)) {
+    toggle_project_like((int) $matches[1]);
+}
+
 if ($method === 'GET' && $path === '/dashboard/projects') {
     dashboard_projects();
 }
@@ -163,11 +179,23 @@ if ($method === 'POST' && $path === '/dashboard/uploads/image') {
     upload_project_image();
 }
 
+if ($method === 'GET' && $path === '/dashboard/uploads/health') {
+    upload_project_health();
+}
+
 if ($method === 'PUT' && preg_match('#^/dashboard/projects/(\d+)$#', $path, $matches)) {
     update_project((int) $matches[1]);
 }
 
+if ($method === 'POST' && preg_match('#^/dashboard/projects/(\d+)/update$#', $path, $matches)) {
+    update_project((int) $matches[1]);
+}
+
 if ($method === 'DELETE' && preg_match('#^/dashboard/projects/(\d+)$#', $path, $matches)) {
+    delete_project((int) $matches[1]);
+}
+
+if ($method === 'POST' && preg_match('#^/dashboard/projects/(\d+)/delete$#', $path, $matches)) {
     delete_project((int) $matches[1]);
 }
 

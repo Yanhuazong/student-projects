@@ -2,7 +2,7 @@ import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { buildClassPath, getActiveClassSlug } from '../utils/classRouting';
 
-export default function ProtectedRoute({ children }) {
+export default function ProtectedRoute({ children, allowedRoles = [] }) {
   const { authLoading, user } = useAuth();
   const location = useLocation();
   const activeClassSlug = getActiveClassSlug(location.pathname);
@@ -13,6 +13,10 @@ export default function ProtectedRoute({ children }) {
 
   if (!user) {
     return <Navigate to={buildClassPath('/login', activeClassSlug)} replace state={{ from: location.pathname }} />;
+  }
+
+  if (allowedRoles.length > 0 && !allowedRoles.includes(user.role)) {
+    return <Navigate to={buildClassPath('/', activeClassSlug)} replace />;
   }
 
   return children;

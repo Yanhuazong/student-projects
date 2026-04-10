@@ -13,7 +13,7 @@ function list_users()
     $statement = $pdo->prepare(
            "SELECT id, class_id, name, email, role, is_active, created_at
             FROM users
-            WHERE role = 'admin' OR (role = 'manager' AND class_id = ?)
+            WHERE role = 'admin' OR (role IN ('manager', 'user') AND class_id = ?)
             ORDER BY role DESC, name ASC"
     );
     $statement->execute(array($class['id']));
@@ -35,10 +35,12 @@ function create_user()
     $input = read_json_body();
     require_fields($input, array('name', 'email', 'password', 'role'));
 
-    $role = $input['role'] === 'admin' ? 'admin' : 'manager';
+    $allowedRoles = array('admin', 'manager', 'user');
+    $requestedRole = isset($input['role']) ? strtolower(trim($input['role'])) : 'manager';
+    $role = in_array($requestedRole, $allowedRoles, true) ? $requestedRole : 'manager';
     $classId = null;
 
-    if ($role === 'manager') {
+    if ($role === 'manager' || $role === 'user') {
         if (!empty($input['class_id'])) {
             $_GET['class_id'] = (int) $input['class_id'];
         }

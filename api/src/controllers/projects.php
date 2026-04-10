@@ -2,6 +2,7 @@
 
 require_once dirname(__DIR__) . '/config/database.php';
 require_once dirname(__DIR__) . '/controllers/classes.php';
+require_once dirname(__DIR__) . '/controllers/vote_categories.php';
 require_once dirname(__DIR__) . '/middleware/auth.php';
 require_once dirname(__DIR__) . '/utils/response.php';
 
@@ -35,7 +36,7 @@ function project_select_sql()
         INNER JOIN users u ON u.id = p.manager_user_id
         LEFT JOIN (
             SELECT project_id, COUNT(*) AS like_count
-            FROM favorites
+            FROM project_votes
             GROUP BY project_id
         ) fc ON fc.project_id = p.id
     ";
@@ -66,6 +67,147 @@ function semester_class_id($pdo, $semesterId)
     }
 
     return (int) $classId;
+}
+
+function build_vote_counts_for_projects($pdo, $semesterId, $projectIds)
+{
+    if ((int) $semesterId <= 0 || count($projectIds) === 0) {
+        return array();
+    }
+
+    $placeholders = implode(',', array_fill(0, count($projectIds), '?'));
+    $params = array_merge(array((int) $semesterId), $projectIds);
+    $statement = $pdo->prepare(
+        'SELECT project_id, category_id, COUNT(*) AS vote_count
+         FROM project_votes
+         WHERE semester_id = ? AND project_id IN (' . $placeholders . ')
+         GROUP BY project_id, category_id'
+    );
+    $statement->execute($params);
+    $rows = $statement->fetchAll();
+    $countsByProject = array();
+
+    foreach ($rows as $row) {
+        $projectId = (int) $row['project_id'];
+        $categoryId = (int) $row['category_id'];
+        $voteCount = (int) $row['vote_count'];
+
+        if (!isset($countsByProject[$projectId])) {
+            $countsByProject[$projectId] = array();
+        }
+
+        $countsByProject[$projectId][$categoryId] = $voteCount;
+    }
+
+    return $countsByProject;
+}
+
+function build_user_votes_map($pdo, $semesterId, $userId)
+{
+    if ((int) $semesterId <= 0 || (int) $userId <= 0) {
+        return array();
+    }
+
+    $statement = $pdo->prepare(
+        'SELECT category_id, project_id
+         FROM project_votes
+         WHERE semester_id = ? AND user_id = ?'
+    );
+    $statement->execute(array((int) $semesterId, (int) $userId));
+    $rows = $statement->fetchAll();
+    $result = array();
+
+    foreach ($rows as $row) {
+        $result[(string) ((int) $row['category_id'])] = (int) $row['project_id'];
+    }
+
+    return $result;
+}
+
+function attach_vote_metrics_to_projects(&$projects, $categories, $countsByProject)
+{
+    foreach ($projects as &$project) {
+        $projectCounts = isset($countsByProject[$project['id']]) ? $countsByProject[$project['id']] : array();
+        $voteCounts = array();
+        $totalVotes = 0;
+
+        foreach ($categories as $category) {
+            $categoryId = (int) $category['id'];
+            $count = isset($projectCounts[$categoryId]) ? (int) $projectCounts[$categoryId] : 0;
+            $voteCounts[(string) $categoryId] = $count;
+            $totalVotes += $count;
+        }
+
+        $project['vote_counts'] = $voteCounts;
+        $project['total_vote_count'] = $totalVotes;
+        $project['like_count'] = $totalVotes;
+    }
+}
+
+function top_rated_project_limit($totalProjects, $isPrimary)
+{
+    if ($isPrimary) {
+        return 1;
+    }
+
+    if ($totalProjects > 20) {
+        return 3;
+    }
+
+    if ($totalProjects >= 10) {
+        return 2;
+    }
+
+    return 1;
+}
+
+function build_top_rated_sections($projects, $categories)
+{
+    $sections = array();
+    $totalProjects = count($projects);
+
+    foreach ($categories as $category) {
+        $categoryId = (int) $category['id'];
+        $limit = top_rated_project_limit($totalProjects, (int) $category['is_primary'] === 1);
+        $ranked = array();
+
+        foreach ($projects as $project) {
+            $count = isset($project['vote_counts'][(string) $categoryId]) ? (int) $project['vote_counts'][(string) $categoryId] : 0;
+            if ($count <= 0) {
+                continue;
+            }
+
+            $ranked[] = array(
+                'project' => $project,
+                'count' => $count,
+            );
+        }
+
+        usort(
+            $ranked,
+            function ($left, $right) {
+                if ($left['count'] === $right['count']) {
+                    return strcmp($left['project']['title'], $right['project']['title']);
+                }
+
+                return $right['count'] - $left['count'];
+            }
+        );
+
+        $projectsForSection = array();
+        $slice = array_slice($ranked, 0, $limit);
+        foreach ($slice as $entry) {
+            $item = $entry['project'];
+            $item['category_vote_count'] = (int) $entry['count'];
+            $projectsForSection[] = $item;
+        }
+
+        $section = $category;
+        $section['projects'] = $projectsForSection;
+        $sections[] = $section;
+    }
+
+    return $sections;
 }
 
 function assert_manager_within_class($user, $targetClassId)
@@ -102,8 +244,9 @@ function list_public_projects()
 {
     $pdo = get_pdo();
     $class = resolve_active_class($pdo);
+    $categories = get_vote_categories_for_class($pdo, $class['id']);
+    $user = current_user();
     $semesterId = isset($_GET['semester_id']) ? (int) $_GET['semester_id'] : 0;
-    $deviceToken = isset($_GET['device_token']) ? trim($_GET['device_token']) : '';
     $allSemesters = isset($_GET['all_semesters']) && (int) $_GET['all_semesters'] === 1;
     $limit = isset($_GET['limit']) ? (int) $_GET['limit'] : 0;
 
@@ -116,25 +259,69 @@ function list_public_projects()
     }
 
     if ($allSemesters) {
-        $limitClause = $limit > 0 ? " LIMIT $limit" : '';
+        $currentSemesterStatement = $pdo->prepare('SELECT id, name, slug, starts_on, ends_on, is_current FROM semesters WHERE class_id = ? AND is_current = 1 ORDER BY id DESC LIMIT 1');
+        $currentSemesterStatement->execute(array($class['id']));
+        $currentSemester = $currentSemesterStatement->fetch();
+
+        if (!$currentSemester) {
+            json_response(
+                array(
+                    'class' => $class,
+                    'projects' => array(),
+                    'vote_categories' => $categories,
+                    'top_rated' => array(
+                        'semester' => null,
+                        'sections' => array(),
+                    ),
+                    'votes' => array(
+                        'user_votes' => array(),
+                    ),
+                ),
+                200
+            );
+        }
 
         $statement = $pdo->prepare(
-            project_select_sql() . "
-            WHERE p.is_published = 1 AND s.class_id = ? AND COALESCE(fc.like_count, 0) > 0
-            ORDER BY like_count DESC, p.created_at DESC$limitClause"
+            project_select_sql() . '
+            WHERE p.is_published = 1 AND s.class_id = ? AND p.semester_id = ?
+            ORDER BY p.title ASC, p.created_at ASC'
         );
-        $statement->execute(array($class['id']));
+        $statement->execute(array($class['id'], (int) $currentSemester['id']));
         $projects = $statement->fetchAll();
 
         foreach ($projects as &$project) {
             $project = normalize_project_row($project);
         }
 
+        $projectIds = array();
+        foreach ($projects as $project) {
+            $projectIds[] = (int) $project['id'];
+        }
+
+        $countsByProject = build_vote_counts_for_projects($pdo, (int) $currentSemester['id'], $projectIds);
+        attach_vote_metrics_to_projects($projects, $categories, $countsByProject);
+        $userVotes = $user ? build_user_votes_map($pdo, (int) $currentSemester['id'], (int) $user['id']) : array();
+        $sections = build_top_rated_sections($projects, $categories);
+
         json_response(
             array(
                 'class' => $class,
                 'projects' => $projects,
-                'likes' => null,
+                'vote_categories' => $categories,
+                'top_rated' => array(
+                    'semester' => array(
+                        'id' => (int) $currentSemester['id'],
+                        'name' => $currentSemester['name'],
+                        'slug' => $currentSemester['slug'],
+                        'starts_on' => $currentSemester['starts_on'],
+                        'ends_on' => $currentSemester['ends_on'],
+                        'is_current' => (int) $currentSemester['is_current'],
+                    ),
+                    'sections' => $sections,
+                ),
+                'votes' => array(
+                    'user_votes' => $userVotes,
+                ),
             ),
             200
         );
@@ -158,26 +345,26 @@ function list_public_projects()
         $project = normalize_project_row($project);
     }
 
-    $likedProjectIds = array();
-    $likeLimit = 3;
+    $projectIds = array();
+    foreach ($projects as $project) {
+        $projectIds[] = (int) $project['id'];
+    }
 
-    if ($semesterId > 0 && $deviceToken !== '') {
-        $likesStatement = $pdo->prepare('SELECT project_id FROM favorites WHERE semester_id = ? AND device_token = ? ORDER BY id ASC');
-        $likesStatement->execute(array($semesterId, $deviceToken));
-        $likeRows = $likesStatement->fetchAll();
+    $countsByProject = build_vote_counts_for_projects($pdo, $semesterId, $projectIds);
+    attach_vote_metrics_to_projects($projects, $categories, $countsByProject);
 
-        foreach ($likeRows as $likeRow) {
-            $likedProjectIds[] = (int) $likeRow['project_id'];
-        }
+    $userVotes = array();
+    if ($user) {
+        $userVotes = build_user_votes_map($pdo, $semesterId, (int) $user['id']);
     }
 
     json_response(
         array(
             'class' => $class,
             'projects' => $projects,
-            'likes' => array(
-                'project_ids' => $likedProjectIds,
-                'limit' => $likeLimit,
+            'vote_categories' => $categories,
+            'votes' => array(
+                'user_votes' => $userVotes,
             ),
         ),
         200
@@ -367,6 +554,110 @@ function delete_project($projectId)
     json_response(array('message' => 'Project deleted.'), 200);
 }
 
+function project_upload_directories()
+{
+    return array(
+        dirname(__DIR__, 2) . '/public/uploads/projects',
+        dirname(__DIR__, 2) . '/uploads/projects',
+    );
+}
+
+function resolve_writable_project_upload_dir()
+{
+    $directories = project_upload_directories();
+
+    foreach ($directories as $directory) {
+        if (!is_dir($directory) && !mkdir($directory, 0775, true)) {
+            error_log('Project upload directory create failed: ' . $directory);
+            continue;
+        }
+
+        if (!is_writable($directory)) {
+            error_log('Project upload directory not writable: ' . $directory);
+            continue;
+        }
+
+        return $directory;
+    }
+
+    return null;
+}
+
+function upload_error_message($errorCode)
+{
+    $messages = array(
+        UPLOAD_ERR_INI_SIZE => 'Uploaded file exceeds upload_max_filesize.',
+        UPLOAD_ERR_FORM_SIZE => 'Uploaded file exceeds MAX_FILE_SIZE from form.',
+        UPLOAD_ERR_PARTIAL => 'Uploaded file was only partially uploaded.',
+        UPLOAD_ERR_NO_FILE => 'No file was uploaded.',
+        UPLOAD_ERR_NO_TMP_DIR => 'Missing temporary upload folder on server.',
+        UPLOAD_ERR_CANT_WRITE => 'Server failed to write uploaded file to disk.',
+        UPLOAD_ERR_EXTENSION => 'A PHP extension stopped the file upload.',
+    );
+
+    if (isset($messages[$errorCode])) {
+        return $messages[$errorCode];
+    }
+
+    return 'Image upload failed.';
+}
+
+function upload_runtime_diagnostics()
+{
+    $tmpDir = ini_get('upload_tmp_dir');
+    if ($tmpDir === '' || $tmpDir === false) {
+        $tmpDir = sys_get_temp_dir();
+    }
+
+    $directories = project_upload_directories();
+    $directoryChecks = array();
+
+    foreach ($directories as $directory) {
+        $directoryChecks[] = array(
+            'path' => $directory,
+            'exists' => is_dir($directory),
+            'writable' => is_writable($directory),
+        );
+    }
+
+    $processUser = function_exists('posix_geteuid')
+        ? posix_getpwuid(posix_geteuid())
+        : array();
+
+    $diagnostics = array(
+        'php_process_uid' => function_exists('posix_geteuid') ? posix_geteuid() : null,
+        'php_process_user' => isset($processUser['name']) ? $processUser['name'] : get_current_user(),
+        'php_process_gid' => function_exists('posix_getegid') ? posix_getegid() : null,
+        'php_process_group' => (function_exists('posix_getegid') && function_exists('posix_getgrgid'))
+            ? (posix_getgrgid(posix_getegid())['name'] ?? null)
+            : null,
+        'file_uploads' => ini_get('file_uploads'),
+        'upload_tmp_dir' => $tmpDir,
+        'upload_tmp_dir_exists' => is_dir($tmpDir),
+        'upload_tmp_dir_writable' => is_writable($tmpDir),
+        'upload_max_filesize' => ini_get('upload_max_filesize'),
+        'post_max_size' => ini_get('post_max_size'),
+        'memory_limit' => ini_get('memory_limit'),
+        'open_basedir' => ini_get('open_basedir'),
+        'target_directories' => $directoryChecks,
+    );
+
+    return $diagnostics;
+}
+
+function upload_project_health()
+{
+    require_auth(array('admin', 'manager'));
+
+    json_response(
+        array(
+            'status' => 'ok',
+            'diagnostics' => upload_runtime_diagnostics(),
+        ),
+        200
+    );
+}
+
 function upload_project_image()
 {
     require_auth(array('admin', 'manager'));
@@ -378,7 +669,14 @@ function upload_project_image()
     $file = $_FILES['image'];
 
     if (!isset($file['error']) || (int) $file['error'] !== UPLOAD_ERR_OK) {
-        json_response(array('error' => 'Image upload failed.'), 400);
+        $errorCode = isset($file['error']) ? (int) $file['error'] : -1;
+        json_response(
+            array(
+                'error' => upload_error_message($errorCode),
+                'code' => $errorCode,
+            ),
+            400
+        );
     }
 
     $maxBytes = 5 * 1024 * 1024;
@@ -423,23 +721,38 @@ function upload_project_image()
         json_response(array('error' => 'Only JPG, PNG, WEBP, and GIF images are allowed.'), 400);
     }
 
-    $uploadDir = dirname(__DIR__, 2) . '/public/uploads/projects';
-    if (!is_dir($uploadDir) && !mkdir($uploadDir, 0775, true)) {
-        json_response(array('error' => 'Unable to create upload directory.'), 500);
+    $uploadDir = resolve_writable_project_upload_dir();
+    if ($uploadDir === null) {
+        json_response(array('error' => 'Upload storage is not writable. Please check folder permissions for api/public/uploads/projects.'), 500);
     }
 
-    $filename = 'project-' . time() . '-' . bin2hex(random_bytes(6)) . '.' . $allowedMimeTypes[$mimeType];
+    try {
+        $randomSuffix = bin2hex(random_bytes(6));
+    } catch (Exception $exception) {
+        error_log('Project upload random_bytes failed: ' . $exception->getMessage());
+        $randomSuffix = dechex(mt_rand(0, 0xffffff)) . dechex(mt_rand(0, 0xffffff));
+    }
+
+    $filename = 'project-' . time() . '-' . $randomSuffix . '.' . $allowedMimeTypes[$mimeType];
     $destination = $uploadDir . '/' . $filename;
 
     if (!move_uploaded_file($tmpName, $destination)) {
-        json_response(array('error' => 'Unable to store uploaded file.'), 500);
+        error_log('Project upload move failed: ' . $destination);
+        json_response(
+            array(
+                'error' => 'Unable to store uploaded file.',
+                'diagnostics' => upload_runtime_diagnostics(),
+            ),
+            500
+        );
     }
 
     $relativePath = '/uploads/projects/' . $filename;
     $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443);
     $scheme = $isHttps ? 'https' : 'http';
     $host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== '' ? $_SERVER['HTTP_HOST'] : 'localhost';
-    $absolutePath = $scheme . '://' . $host . $relativePath;
+    $scriptName = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '';
+    $absolutePath = $scheme . '://' . $host . $scriptName . $relativePath;
 
     json_response(
         array(
@@ -453,14 +766,18 @@ function upload_project_image()
 
 function toggle_project_like($projectId)
 {
+    $user = require_auth(array('admin', 'manager', 'user'));
     $pdo = get_pdo();
     $input = read_json_body();
-    require_fields($input, array('device_token'));
-    $deviceToken = trim($input['device_token']);
-    $likeLimit = 3;
+    require_fields($input, array('category_id'));
+    $categoryId = (int) $input['category_id'];
+
+    if ($categoryId <= 0) {
+        json_response(array('error' => 'A valid vote category is required.'), 422);
+    }
 
     $projectStatement = $pdo->prepare(
-        'SELECT p.id, p.semester_id, s.is_current
+        'SELECT p.id, p.semester_id, s.class_id, s.is_current
          FROM projects p
          INNER JOIN semesters s ON s.id = p.semester_id
          WHERE p.id = ? AND p.is_published = 1
@@ -474,61 +791,85 @@ function toggle_project_like($projectId)
     }
 
     if ((int) $project['is_current'] !== 1) {
-        json_response(array('error' => 'Likes are only available for the current semester.'), 409);
+        json_response(array('error' => 'Voting is only available for the current semester.'), 409);
+    }
+
+    $categoryStatement = $pdo->prepare(
+        'SELECT id
+         FROM vote_categories
+         WHERE id = ? AND class_id = ? AND is_active = 1
+         LIMIT 1'
+    );
+    $categoryStatement->execute(array($categoryId, (int) $project['class_id']));
+    $category = $categoryStatement->fetch();
+
+    if (!$category) {
+        json_response(array('error' => 'Vote category not found for this class.'), 404);
     }
 
     $existingStatement = $pdo->prepare(
-        'SELECT id FROM favorites WHERE semester_id = ? AND project_id = ? AND device_token = ? LIMIT 1'
+        'SELECT id, project_id
+         FROM project_votes
+         WHERE semester_id = ? AND user_id = ? AND category_id = ?
+         LIMIT 1'
     );
-    $existingStatement->execute(array((int) $project['semester_id'], (int) $projectId, $deviceToken));
+    $existingStatement->execute(array((int) $project['semester_id'], (int) $user['id'], $categoryId));
     $existing = $existingStatement->fetch();
 
-    if ($existing) {
-        $deleteStatement = $pdo->prepare('DELETE FROM favorites WHERE id = ?');
+    if ($existing && (int) $existing['project_id'] === (int) $projectId) {
+        $deleteStatement = $pdo->prepare('DELETE FROM project_votes WHERE id = ?');
         $deleteStatement->execute(array((int) $existing['id']));
 
-        $countStatement = $pdo->prepare('SELECT COUNT(*) FROM favorites WHERE project_id = ?');
-        $countStatement->execute(array((int) $projectId));
-        $likeCount = (int) $countStatement->fetchColumn();
+        $countStatement = $pdo->prepare('SELECT COUNT(*) FROM project_votes WHERE project_id = ? AND category_id = ?');
+        $countStatement->execute(array((int) $projectId, $categoryId));
+        $voteCount = (int) $countStatement->fetchColumn();
+        $userVotes = build_user_votes_map($pdo, (int) $project['semester_id'], (int) $user['id']);
 
         json_response(
             array(
-                'message' => 'Like removed.',
-                'liked' => false,
-                'like_count' => $likeCount,
-                'limit' => $likeLimit,
+                'message' => 'Vote removed.',
+                'voted' => false,
+                'category_id' => $categoryId,
+                'project_id' => (int) $projectId,
+                'vote_count' => $voteCount,
+                'user_votes' => $userVotes,
             ),
             200
         );
     }
 
-    $deviceLikesStatement = $pdo->prepare('SELECT COUNT(*) FROM favorites WHERE semester_id = ? AND device_token = ?');
-    $deviceLikesStatement->execute(array((int) $project['semester_id'], $deviceToken));
-    $deviceLikeCount = (int) $deviceLikesStatement->fetchColumn();
-
-    if ($deviceLikeCount >= $likeLimit) {
-        json_response(
+    if ($existing) {
+        $updateStatement = $pdo->prepare('UPDATE project_votes SET project_id = ?, created_at = CURRENT_TIMESTAMP WHERE id = ?');
+        $updateStatement->execute(array((int) $projectId, (int) $existing['id']));
+    } else {
+        $insertStatement = $pdo->prepare(
+            'INSERT INTO project_votes (class_id, semester_id, project_id, category_id, user_id)
+             VALUES (?, ?, ?, ?, ?)'
+        );
+        $insertStatement->execute(
             array(
-                'error' => 'You can like up to 3 projects this semester.',
-                'limit' => $likeLimit,
-            ),
-            409
+                (int) $project['class_id'],
+                (int) $project['semester_id'],
+                (int) $projectId,
+                $categoryId,
+                (int) $user['id'],
+            )
         );
     }
 
-    $insertStatement = $pdo->prepare('INSERT INTO favorites (semester_id, project_id, device_token) VALUES (?, ?, ?)');
-    $insertStatement->execute(array((int) $project['semester_id'], (int) $projectId, $deviceToken));
-
-    $countStatement = $pdo->prepare('SELECT COUNT(*) FROM favorites WHERE project_id = ?');
-    $countStatement->execute(array((int) $projectId));
-    $likeCount = (int) $countStatement->fetchColumn();
+    $countStatement = $pdo->prepare('SELECT COUNT(*) FROM project_votes WHERE project_id = ? AND category_id = ?');
+    $countStatement->execute(array((int) $projectId, $categoryId));
+    $voteCount = (int) $countStatement->fetchColumn();
+    $userVotes = build_user_votes_map($pdo, (int) $project['semester_id'], (int) $user['id']);
 
     json_response(
         array(
-            'message' => 'Like saved.',
-            'liked' => true,
-            'like_count' => $likeCount,
-            'limit' => $likeLimit,
+            'message' => 'Vote saved.',
+            'voted' => true,
+            'category_id' => $categoryId,
+            'project_id' => (int) $projectId,
+            'vote_count' => $voteCount,
+            'user_votes' => $userVotes,
         ),
         200
     );

@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import DOMPurify from 'dompurify';
 import { Link, useLocation, useParams } from 'react-router-dom';
-import { apiRequest } from '../utils/api';
+import { apiRequest, resolveImageUrl } from '../utils/api';
 import { buildClassPath, getActiveClassSlug } from '../utils/classRouting';
 
 export default function ProjectPage() {
@@ -50,7 +50,7 @@ export default function ProjectPage() {
       <article className="detail-card">
         <img
           className="detail-hero"
-          src={project.image_url || 'https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=1600&q=80'}
+          src={resolveImageUrl(project.image_url) || 'https://images.unsplash.com/photo-1498050108023-c5249f4df085?auto=format&fit=crop&w=1600&q=80'}
           alt={project.title}
         />
         <div className="detail-card__body">

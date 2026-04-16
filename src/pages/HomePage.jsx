@@ -369,6 +369,7 @@ export default function HomePage() {
               </section>
             );
           })}
+
         </section>
       ) : null}
 

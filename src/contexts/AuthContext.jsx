@@ -48,6 +48,7 @@ function decodeTokenPayload(token) {
       name: payload.name || '',
       email: payload.email,
       role: payload.role,
+      memberships: Array.isArray(payload.memberships) ? payload.memberships : [],
     };
   } catch {
     return null;
@@ -95,6 +96,32 @@ export function AuthProvider({ children }) {
     setSession(response.token, response.user);
   }
 
+  async function register(name, email, password, options = {}) {
+    const response = await apiRequest('/auth/register', {
+      method: 'POST',
+      body: {
+        name,
+        email,
+        password,
+        role: options.role || 'user',
+        manager_invite_code: options.managerInviteCode || '',
+      },
+    });
+
+    setSession(response.token, response.user);
+  }
+
+  async function changePassword(currentPassword, newPassword) {
+    await apiRequest('/auth/change-password', {
+      method: 'POST',
+      token,
+      body: {
+        current_password: currentPassword,
+        new_password: newPassword,
+      },
+    });
+  }
+
   async function bootstrapAdmin(payload) {
     const response = await apiRequest('/auth/bootstrap-admin', {
       method: 'POST',
@@ -115,8 +142,10 @@ export function AuthProvider({ children }) {
       value={{
         authLoading,
         bootstrapAdmin,
+        changePassword,
         login,
         logout,
+        register,
         token,
         user,
       }}

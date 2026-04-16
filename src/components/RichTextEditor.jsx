@@ -1,7 +1,7 @@
 import { useMemo, useRef } from 'react';
 import ReactQuill from 'react-quill';
 import 'react-quill/dist/quill.snow.css';
-import { apiRequest } from '../utils/api';
+import { uploadApiRequest } from '../utils/api';
 
 const FORMATS = ['header', 'bold', 'italic', 'underline', 'blockquote', 'list', 'bullet', 'link', 'align', 'image'];
 
@@ -62,7 +62,7 @@ export default function RichTextEditor({ value, onChange, token }) {
         const formData = new FormData();
         formData.append('image', selectedFile);
 
-        const response = await apiRequest('/dashboard/uploads/image', {
+        const response = await uploadApiRequest('/dashboard/uploads/image', {
           method: 'POST',
           body: formData,
           token,

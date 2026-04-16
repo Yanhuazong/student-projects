@@ -2,10 +2,13 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, Route, Routes, useLocation } from 'react-router-dom';
 import ProtectedRoute from './components/ProtectedRoute';
 import { useAuth } from './contexts/AuthContext';
+import AccountPage from './pages/AccountPage';
 import DashboardPage from './pages/DashboardPage';
+import ForgotPasswordPage from './pages/ForgotPasswordPage';
 import HomePage from './pages/HomePage';
 import LoginPage from './pages/LoginPage';
 import ProjectPage from './pages/ProjectPage';
+import RegisterPage from './pages/RegisterPage';
 import { apiRequest } from './utils/api';
 import { buildClassPath, buildClassRoute, getActiveClassSlug, getDefaultClassSlug, getFixedClassSlug } from './utils/classRouting';
 
@@ -45,11 +48,10 @@ function AppHeader() {
         </Link>
         <nav className="site-nav">
           <Link to={buildClassPath('/', activeClassSlug)}>Projects</Link>
-          {canAccessDashboard ? (
-            <Link to={buildClassPath('/dashboard', activeClassSlug)}>Dashboard</Link>
-          ) : (
-            <Link to={buildClassPath('/login', activeClassSlug)}>Login</Link>
-          )}
+          {canAccessDashboard ? <Link to={buildClassPath('/dashboard', activeClassSlug)}>Dashboard</Link> : null}
+          {!user ? <Link to={buildClassPath('/login', activeClassSlug)}>Login</Link> : null}
+          {!user ? <Link to={buildClassPath('/register', activeClassSlug)}>Register</Link> : null}
+          {user ? <Link to={buildClassPath('/account', activeClassSlug)}>Account</Link> : null}
           {user ? (
             <button type="button" className="ghost-button" onClick={logout}>
               Sign out
@@ -90,6 +92,16 @@ export default function App() {
         <Route path={buildClassRoute('/')} element={<HomePage />} />
         <Route path={buildClassRoute('/projects/:slug')} element={<ProjectPage />} />
         <Route path={buildClassRoute('/login')} element={<LoginPage />} />
+        <Route path={buildClassRoute('/forgot-password')} element={<ForgotPasswordPage />} />
+        <Route path={buildClassRoute('/register')} element={<RegisterPage />} />
+        <Route
+          path={buildClassRoute('/account')}
+          element={
+            <ProtectedRoute allowedRoles={['admin', 'manager', 'user']}>
+              <AccountPage />
+            </ProtectedRoute>
+          }
+        />
         <Route
           path={buildClassRoute('/dashboard')}
           element={

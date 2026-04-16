@@ -2,6 +2,7 @@
 
 require_once dirname(__DIR__) . '/config/database.php';
 require_once dirname(__DIR__) . '/controllers/classes.php';
+require_once dirname(__DIR__) . '/controllers/memberships.php';
 require_once dirname(__DIR__) . '/controllers/vote_categories.php';
 require_once dirname(__DIR__) . '/middleware/auth.php';
 require_once dirname(__DIR__) . '/utils/response.php';
@@ -142,6 +143,7 @@ function attach_vote_metrics_to_projects(&$projects, $categories, $countsByProje
         $project['total_vote_count'] = $totalVotes;
         $project['like_count'] = $totalVotes;
     }
+    unset($project);
 }
 
 function top_rated_project_limit($totalProjects, $isPrimary)
@@ -235,7 +237,9 @@ function assert_manager_owner_within_class($pdo, $managerUserId, $targetClassId)
         json_response(array('error' => 'Assigned project owner must be a manager.'), 422);
     }
 
-    if ((int) $manager['class_id'] !== (int) $targetClassId) {
+    $membership = resolve_membership_for_class($pdo, $manager, (int) $targetClassId);
+
+    if (!$membership || (int) $membership['is_active'] !== 1 || normalize_membership_role($membership['class_role']) !== 'manager') {
         json_response(array('error' => 'Manager must belong to the same class as the selected semester.'), 422);
     }
 }
@@ -292,6 +296,7 @@ function list_public_projects()
         foreach ($projects as &$project) {
             $project = normalize_project_row($project);
         }
+        unset($project);
 
         $projectIds = array();
         foreach ($projects as $project) {
@@ -344,6 +349,7 @@ function list_public_projects()
     foreach ($projects as &$project) {
         $project = normalize_project_row($project);
     }
+    unset($project);
 
     $projectIds = array();
     foreach ($projects as $project) {
@@ -415,6 +421,7 @@ function dashboard_projects()
     foreach ($projects as &$project) {
         $project = normalize_project_row($project);
     }
+    unset($project);
 
     json_response(array('projects' => $projects), 200);
 }
@@ -556,10 +563,41 @@ function delete_project($projectId)
 
 function project_upload_directories()
 {
+    $configuredDirectory = trim((string) env_value('PROJECT_UPLOAD_DIR', ''));
+    $configuredDirectory = str_replace('\\', '/', $configuredDirectory);
+
+    if ($configuredDirectory !== '') {
+        return array(rtrim($configuredDirectory, '/'));
+    }
+
     return array(
-        dirname(__DIR__, 2) . '/public/uploads/projects',
-        dirname(__DIR__, 2) . '/uploads/projects',
+        dirname(__DIR__, 3) . '/uploads',
     );
+}
+
+function project_upload_base_path()
+{
+    $configuredPublicPath = trim((string) env_value('PROJECT_UPLOAD_PUBLIC_PATH', ''));
+    if ($configuredPublicPath !== '') {
+        $normalizedConfiguredPath = '/' . ltrim(str_replace('\\', '/', $configuredPublicPath), '/');
+        return rtrim($normalizedConfiguredPath, '/');
+    }
+
+    $scriptName = isset($_SERVER['SCRIPT_NAME']) ? (string) $_SERVER['SCRIPT_NAME'] : '';
+    $scriptName = str_replace('\\', '/', $scriptName);
+
+    if ($scriptName === '' || $scriptName[0] !== '/') {
+        return '';
+    }
+
+    $publicIndexSuffix = '/api/public/index.php';
+    $suffixPosition = strpos($scriptName, $publicIndexSuffix);
+
+    if ($suffixPosition !== false) {
+        return rtrim(substr($scriptName, 0, $suffixPosition), '/') . '/uploads';
+    }
+
+    return rtrim(dirname($scriptName), '/') . '/uploads';
 }
 
 function resolve_writable_project_upload_dir()
@@ -629,7 +667,11 @@ function upload_runtime_diagnostics()
         'php_process_user' => isset($processUser['name']) ? $processUser['name'] : get_current_user(),
         'php_process_gid' => function_exists('posix_getegid') ? posix_getegid() : null,
         'php_process_group' => (function_exists('posix_getegid') && function_exists('posix_getgrgid'))
-            ? (posix_getgrgid(posix_getegid())['name'] ?? null)
+            ? (function () {
+                $groupInfo = posix_getgrgid(posix_getegid());
+
+                return (is_array($groupInfo) && isset($groupInfo['name'])) ? $groupInfo['name'] : null;
+            })()
             : null,
         'file_uploads' => ini_get('file_uploads'),
         'upload_tmp_dir' => $tmpDir,
@@ -723,17 +765,27 @@ function upload_project_image()
 
     $uploadDir = resolve_writable_project_upload_dir();
     if ($uploadDir === null) {
-        json_response(array('error' => 'Upload storage is not writable. Please check folder permissions for api/public/uploads/projects.'), 500);
+        json_response(
+            array(
+                'error' => 'Upload storage is not writable. Please check folder permissions for the uploads directory.',
+                'diagnostics' => upload_runtime_diagnostics(),
+            ),
+            500
+        );
     }
 
-    try {
-        $randomSuffix = bin2hex(random_bytes(6));
-    } catch (Exception $exception) {
-        error_log('Project upload random_bytes failed: ' . $exception->getMessage());
+    if (function_exists('random_bytes')) {
+        try {
+            $randomSuffix = bin2hex(random_bytes(6));
+        } catch (Exception $exception) {
+            error_log('Project upload random_bytes failed: ' . $exception->getMessage());
+            $randomSuffix = dechex(mt_rand(0, 0xffffff)) . dechex(mt_rand(0, 0xffffff));
+        }
+    } else {
         $randomSuffix = dechex(mt_rand(0, 0xffffff)) . dechex(mt_rand(0, 0xffffff));
     }
 
-    $filename = 'project-' . time() . '-' . $randomSuffix . '.' . $allowedMimeTypes[$mimeType];
+    $filename = 'project-upload-' . time() . '-' . $randomSuffix . '.' . $allowedMimeTypes[$mimeType];
     $destination = $uploadDir . '/' . $filename;
 
     if (!move_uploaded_file($tmpName, $destination)) {
@@ -747,12 +799,18 @@ function upload_project_image()
         );
     }
 
-    $relativePath = '/uploads/projects/' . $filename;
+    $basePath = project_upload_base_path();
+    $relativePath = ($basePath === '' ? '' : $basePath) . '/' . $filename;
     $isHttps = (!empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off') || (isset($_SERVER['SERVER_PORT']) && (int) $_SERVER['SERVER_PORT'] === 443);
     $scheme = $isHttps ? 'https' : 'http';
     $host = isset($_SERVER['HTTP_HOST']) && $_SERVER['HTTP_HOST'] !== '' ? $_SERVER['HTTP_HOST'] : 'localhost';
-    $scriptName = isset($_SERVER['SCRIPT_NAME']) ? $_SERVER['SCRIPT_NAME'] : '';
-    $absolutePath = $scheme . '://' . $host . $scriptName . $relativePath;
+    $absolutePath = $scheme . '://' . $host . $relativePath;
+
+    $configuredPublicUrl = trim((string) env_value('PROJECT_UPLOAD_PUBLIC_URL', ''));
+    if ($configuredPublicUrl !== '') {
+        $absolutePath = rtrim($configuredPublicUrl, '/') . '/' . $filename;
+        $relativePath = $absolutePath;
+    }
 
     json_response(
         array(

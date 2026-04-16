@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Navigate, useLocation } from 'react-router-dom';
+import { Link, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { apiRequest } from '../utils/api';
 import { buildClassPath, getActiveClassSlug } from '../utils/classRouting';
@@ -110,6 +110,13 @@ export default function LoginPage() {
             {submitting ? 'Signing in...' : 'Sign in'}
           </button>
         </form>
+        <p>
+          <Link to={buildClassPath('/forgot-password', activeClassSlug)}>Forgot your password?</Link>
+        </p>
+        {error ? <div className="error-banner auth-error">{error}</div> : null}
+        <p>
+          New here? <Link to={buildClassPath('/register', activeClassSlug)}>Create an account</Link>
+        </p>
       </section>
 
       {bootstrapNeeded ? (
@@ -151,8 +158,6 @@ export default function LoginPage() {
           </form>
         </section>
       ) : null}
-
-      {error ? <div className="error-banner auth-error">{error}</div> : null}
     </main>
   );
 }

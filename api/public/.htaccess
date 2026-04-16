@@ -1,0 +1,22 @@
+RewriteEngine On
+
+# Allow /index.php/... style path info on hosts that disable it by default.
+AcceptPathInfo On
+
+# Route all non-file, non-directory requests to the API front controller.
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^ index.php [QSA,L]
+
+<IfModule mod_headers.c>
+    Header always unset Access-Control-Allow-Origin
+    Header always unset Access-Control-Allow-Methods
+    Header always unset Access-Control-Allow-Headers
+    Header always set Access-Control-Allow-Origin "https://va.tech.purdue.edu"
+    Header always set Access-Control-Allow-Methods "GET, POST, PUT, DELETE, OPTIONS"
+    Header always set Access-Control-Allow-Headers "Content-Type, Authorization"
+</IfModule>
+
+# Return a clean preflight response at Apache level too.
+RewriteCond %{REQUEST_METHOD} OPTIONS
+RewriteRule ^ - [L]

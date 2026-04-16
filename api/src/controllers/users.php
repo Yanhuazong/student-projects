@@ -2,6 +2,7 @@
 
 require_once dirname(__DIR__) . '/config/database.php';
 require_once dirname(__DIR__) . '/controllers/classes.php';
+require_once dirname(__DIR__) . '/controllers/memberships.php';
 require_once dirname(__DIR__) . '/middleware/auth.php';
 require_once dirname(__DIR__) . '/utils/response.php';
 
@@ -11,12 +12,15 @@ function list_users()
     $pdo = get_pdo();
     $class = resolve_active_class($pdo, array('allow_inactive' => true));
     $statement = $pdo->prepare(
-           "SELECT id, class_id, name, email, role, is_active, created_at
-            FROM users
-            WHERE role = 'admin' OR (role IN ('manager', 'user') AND class_id = ?)
-            ORDER BY role DESC, name ASC"
+           "SELECT DISTINCT u.id, u.class_id, u.name, u.email, u.role, u.is_active, u.created_at
+            FROM users u
+            LEFT JOIN user_class_memberships m ON m.user_id = u.id AND m.class_id = ? AND m.is_active = 1
+            WHERE u.role = 'admin'
+               OR m.user_id IS NOT NULL
+               OR (u.role IN ('manager', 'user') AND u.class_id = ?)
+            ORDER BY u.role DESC, u.name ASC"
     );
-    $statement->execute(array($class['id']));
+    $statement->execute(array($class['id'], $class['id']));
     $users = $statement->fetchAll();
 
     foreach ($users as &$user) {
@@ -49,16 +53,37 @@ function create_user()
         $classId = (int) $class['id'];
     }
 
-    $statement = $pdo->prepare('INSERT INTO users (class_id, name, email, password_hash, role, is_active) VALUES (?, ?, ?, ?, ?, 1)');
-    $statement->execute(
-        array(
-            $classId,
-            trim($input['name']),
-            strtolower(trim($input['email'])),
-            password_hash($input['password'], PASSWORD_DEFAULT),
-            $role,
-        )
-    );
+    $name = trim($input['name']);
+    $email = strtolower(trim($input['email']));
+    $passwordHash = password_hash($input['password'], PASSWORD_DEFAULT);
+    $existingStatement = $pdo->prepare('SELECT id, role FROM users WHERE email = ? LIMIT 1');
+    $existingStatement->execute(array($email));
+    $existingUser = $existingStatement->fetch();
+
+    if ($existingUser) {
+        $userId = (int) $existingUser['id'];
+
+        if ($role === 'admin') {
+            $promoteStatement = $pdo->prepare('UPDATE users SET role = ?, is_active = 1 WHERE id = ?');
+            $promoteStatement->execute(array('admin', $userId));
+        }
+    } else {
+        $statement = $pdo->prepare('INSERT INTO users (class_id, name, email, password_hash, role, is_active) VALUES (?, ?, ?, ?, ?, 1)');
+        $statement->execute(
+            array(
+                $classId,
+                $name,
+                $email,
+                $passwordHash,
+                $role,
+            )
+        );
+        $userId = (int) $pdo->lastInsertId();
+    }
+
+    if ($role === 'manager' || $role === 'user') {
+        upsert_user_class_membership($pdo, $userId, (int) $classId, $role, 1);
+    }
 
     json_response(array('message' => 'User created.'), 201);
 }

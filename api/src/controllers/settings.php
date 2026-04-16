@@ -23,6 +23,20 @@ function upsert_class_setting($pdo, $classId, $key, $value)
     $statement->execute(array((int) $classId, $key, $value));
 }
 
+function fetch_class_setting_value($pdo, $classId, $key, $defaultValue = '')
+{
+    $statement = $pdo->prepare(
+        'SELECT setting_value
+         FROM class_settings
+         WHERE class_id = ? AND setting_key = ?
+         LIMIT 1'
+    );
+    $statement->execute(array((int) $classId, $key));
+    $value = $statement->fetchColumn();
+
+    return $value !== false ? $value : $defaultValue;
+}
+
 function fetch_site_settings($pdo, $classId = null)
 {
     $defaults = default_site_settings();
@@ -175,7 +189,13 @@ function admin_settings()
     require_auth(array('admin'));
     $pdo = get_pdo();
     $class = resolve_active_class($pdo, array('allow_inactive' => true));
-    $settings = fetch_site_settings($pdo, $class['id']);
+    $settings = array_merge(
+        fetch_site_settings($pdo, $class['id']),
+        array(
+            'manager_registration_code' => fetch_class_setting_value($pdo, $class['id'], 'manager_registration_code', ''),
+            'password_reset_code' => fetch_class_setting_value($pdo, $class['id'], 'password_reset_code', ''),
+        )
+    );
     $voteCategories = get_vote_categories_for_class($pdo, $class['id'], true);
 
     json_response(array('class' => $class, 'settings' => $settings, 'vote_categories' => $voteCategories), 200);
@@ -200,13 +220,25 @@ function update_admin_settings()
 
     upsert_class_setting($pdo, $class['id'], 'site_logo_text', $logoText);
     upsert_class_setting($pdo, $class['id'], 'home_heading', $homeHeading);
+    if (array_key_exists('manager_registration_code', $input)) {
+        upsert_class_setting($pdo, $class['id'], 'manager_registration_code', trim((string) $input['manager_registration_code']));
+    }
+    if (array_key_exists('password_reset_code', $input)) {
+        upsert_class_setting($pdo, $class['id'], 'password_reset_code', trim((string) $input['password_reset_code']));
+    }
     save_vote_categories($pdo, $class['id'], $normalizedCategories);
 
     json_response(
         array(
             'message' => 'Site settings updated.',
             'class' => $class,
-            'settings' => fetch_site_settings($pdo, $class['id']),
+            'settings' => array_merge(
+                fetch_site_settings($pdo, $class['id']),
+                array(
+                    'manager_registration_code' => fetch_class_setting_value($pdo, $class['id'], 'manager_registration_code', ''),
+                    'password_reset_code' => fetch_class_setting_value($pdo, $class['id'], 'password_reset_code', ''),
+                )
+            ),
             'vote_categories' => get_vote_categories_for_class($pdo, $class['id'], true),
         ),
         200

@@ -43,6 +43,35 @@ CREATE TABLE IF NOT EXISTS users (
   CONSTRAINT fk_users_class FOREIGN KEY (class_id) REFERENCES classes (id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS password_reset_tokens (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id INT UNSIGNED NOT NULL,
+  class_id INT UNSIGNED NOT NULL,
+  token_hash CHAR(64) NOT NULL,
+  expires_at DATETIME NOT NULL,
+  used_at DATETIME DEFAULT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uniq_password_reset_token_hash (token_hash),
+  KEY idx_password_reset_lookup (class_id, used_at, expires_at),
+  KEY idx_password_reset_user (user_id, class_id, used_at),
+  CONSTRAINT fk_password_reset_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT fk_password_reset_class FOREIGN KEY (class_id) REFERENCES classes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS user_class_memberships (
+  user_id INT UNSIGNED NOT NULL,
+  class_id INT UNSIGNED NOT NULL,
+  class_role ENUM('manager', 'user') NOT NULL DEFAULT 'user',
+  is_active TINYINT(1) NOT NULL DEFAULT 1,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (user_id, class_id),
+  KEY idx_memberships_class (class_id, is_active, class_role),
+  CONSTRAINT fk_memberships_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+  CONSTRAINT fk_memberships_class FOREIGN KEY (class_id) REFERENCES classes (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS projects (
   id INT UNSIGNED NOT NULL AUTO_INCREMENT,
   semester_id INT UNSIGNED NOT NULL,
@@ -199,6 +228,74 @@ SET @add_users_class_fk_sql = IF(
 PREPARE add_users_class_fk_statement FROM @add_users_class_fk_sql;
 EXECUTE add_users_class_fk_statement;
 DEALLOCATE PREPARE add_users_class_fk_statement;
+
+SET @has_password_reset_tokens_table = (
+  SELECT COUNT(*)
+  FROM information_schema.tables
+  WHERE table_schema = DATABASE()
+    AND table_name = 'password_reset_tokens'
+);
+SET @create_password_reset_tokens_sql = IF(
+  @has_password_reset_tokens_table = 0,
+  'CREATE TABLE password_reset_tokens (
+    id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    user_id INT UNSIGNED NOT NULL,
+    class_id INT UNSIGNED NOT NULL,
+    token_hash CHAR(64) NOT NULL,
+    expires_at DATETIME NOT NULL,
+    used_at DATETIME DEFAULT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (id),
+    UNIQUE KEY uniq_password_reset_token_hash (token_hash),
+    KEY idx_password_reset_lookup (class_id, used_at, expires_at),
+    KEY idx_password_reset_user (user_id, class_id, used_at),
+    CONSTRAINT fk_password_reset_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    CONSTRAINT fk_password_reset_class FOREIGN KEY (class_id) REFERENCES classes (id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci',
+  'SELECT 1'
+);
+PREPARE create_password_reset_tokens_statement FROM @create_password_reset_tokens_sql;
+EXECUTE create_password_reset_tokens_statement;
+DEALLOCATE PREPARE create_password_reset_tokens_statement;
+
+SET @has_user_class_memberships_table = (
+  SELECT COUNT(*)
+  FROM information_schema.tables
+  WHERE table_schema = DATABASE()
+    AND table_name = 'user_class_memberships'
+);
+SET @create_user_class_memberships_sql = IF(
+  @has_user_class_memberships_table = 0,
+  'CREATE TABLE user_class_memberships (
+    user_id INT UNSIGNED NOT NULL,
+    class_id INT UNSIGNED NOT NULL,
+    class_role ENUM(\'manager\', \'user\') NOT NULL DEFAULT \'user\',
+    is_active TINYINT(1) NOT NULL DEFAULT 1,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    PRIMARY KEY (user_id, class_id),
+    KEY idx_memberships_class (class_id, is_active, class_role),
+    CONSTRAINT fk_memberships_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE,
+    CONSTRAINT fk_memberships_class FOREIGN KEY (class_id) REFERENCES classes (id) ON DELETE CASCADE
+  ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci',
+  'SELECT 1'
+);
+PREPARE create_user_class_memberships_statement FROM @create_user_class_memberships_sql;
+EXECUTE create_user_class_memberships_statement;
+DEALLOCATE PREPARE create_user_class_memberships_statement;
+
+INSERT INTO user_class_memberships (user_id, class_id, class_role, is_active)
+SELECT
+  u.id,
+  u.class_id,
+  CASE WHEN u.role = 'manager' THEN 'manager' ELSE 'user' END,
+  CASE WHEN u.is_active = 1 THEN 1 ELSE 0 END
+FROM users u
+WHERE u.class_id IS NOT NULL
+  AND u.role IN ('manager', 'user')
+ON DUPLICATE KEY UPDATE
+  class_role = VALUES(class_role),
+  is_active = VALUES(is_active);
 
 SET @has_semesters_class_id = (
   SELECT COUNT(*)

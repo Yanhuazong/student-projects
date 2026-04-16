@@ -1,6 +1,7 @@
 <?php
 
 require_once dirname(__DIR__) . '/config/database.php';
+require_once dirname(__DIR__) . '/controllers/memberships.php';
 require_once dirname(__DIR__) . '/utils/response.php';
 
 function app_secret()
@@ -23,6 +24,22 @@ function get_bearer_token()
 
     if (preg_match('/Bearer\s+(.*)$/i', $header, $matches)) {
         return trim($matches[1]);
+    }
+
+    // Fallback for cross-origin multipart uploads where Authorization headers
+    // can trigger preflight failures on constrained hosts.
+    if (isset($_POST['auth_token'])) {
+        $token = trim((string) $_POST['auth_token']);
+        if ($token !== '') {
+            return $token;
+        }
+    }
+
+    if (isset($_GET['auth_token'])) {
+        $token = trim((string) $_GET['auth_token']);
+        if ($token !== '') {
+            return $token;
+        }
     }
 
     return null;
@@ -108,6 +125,27 @@ function current_user()
         $cachedUser = null;
         return null;
     }
+
+    $tokenRole = isset($payload['role']) ? strtolower(trim((string) $payload['role'])) : '';
+    $tokenClassId = isset($payload['class_id']) && $payload['class_id'] !== null ? (int) $payload['class_id'] : null;
+
+    if ($tokenRole !== 'admin') {
+        if ($tokenClassId === null || $tokenClassId <= 0) {
+            $cachedUser = null;
+            return null;
+        }
+
+        $membership = resolve_membership_for_class($pdo, $user, $tokenClassId);
+
+        if (!$membership || (int) $membership['is_active'] !== 1) {
+            $cachedUser = null;
+            return null;
+        }
+    }
+
+    // Use class-aware role and class context from the signed token.
+    $user['role'] = $tokenRole !== '' ? $tokenRole : $user['role'];
+    $user['class_id'] = $tokenClassId;
 
     $cachedUser = $user;
     return $cachedUser;

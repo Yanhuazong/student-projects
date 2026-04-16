@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import RichTextEditor from '../components/RichTextEditor';
 import { useAuth } from '../contexts/AuthContext';
-import { apiRequest, resolveImageUrl } from '../utils/api';
+import { apiRequest, resolveImageUrl, uploadApiRequest } from '../utils/api';
 
 const emptySemesterForm = {
   name: '',
@@ -21,6 +21,8 @@ const emptyUserForm = {
 const emptySiteSettingsForm = {
   site_logo_text: 'Student Projects',
   home_heading: 'Top-rated project stories across every semester.',
+  manager_registration_code: '',
+  password_reset_code: '',
   vote_categories: [
     { id: 0, name: 'Best Overall', icon: 'trophy' },
     { id: 0, name: 'Most Creative', icon: 'palette' },
@@ -121,6 +123,8 @@ export default function DashboardPage() {
           setSiteSettingsForm({
             site_logo_text: responses[3].settings?.site_logo_text || emptySiteSettingsForm.site_logo_text,
             home_heading: responses[3].settings?.home_heading || emptySiteSettingsForm.home_heading,
+            manager_registration_code: responses[3].settings?.manager_registration_code || '',
+            password_reset_code: responses[3].settings?.password_reset_code || '',
             vote_categories: normalizeVoteCategoriesForForm(responses[3].vote_categories),
           });
         }
@@ -184,6 +188,11 @@ export default function DashboardPage() {
     event.preventDefault();
     setError('');
     setMessage('');
+
+    if (imageUploading) {
+      setError('Please wait for the image upload to finish before saving the project.');
+      return;
+    }
 
     const descriptionText = projectForm.description_html
       .replace(/<[^>]*>/g, ' ')
@@ -301,6 +310,8 @@ export default function DashboardPage() {
       setSiteSettingsForm({
         site_logo_text: response.settings?.site_logo_text || emptySiteSettingsForm.site_logo_text,
         home_heading: response.settings?.home_heading || emptySiteSettingsForm.home_heading,
+        manager_registration_code: response.settings?.manager_registration_code || '',
+        password_reset_code: response.settings?.password_reset_code || '',
         vote_categories: normalizeVoteCategoriesForForm(response.vote_categories),
       });
       setMessage('Site text updated. Refresh the homepage to see changes.');
@@ -324,7 +335,7 @@ export default function DashboardPage() {
       const formData = new FormData();
       formData.append('image', file);
 
-      const response = await apiRequest('/dashboard/uploads/image', {
+      const response = await uploadApiRequest('/dashboard/uploads/image', {
         method: 'POST',
         body: formData,
         token,
@@ -482,6 +493,24 @@ export default function DashboardPage() {
                     value={siteSettingsForm.home_heading}
                     onChange={(event) => setSiteSettingsForm({ ...siteSettingsForm, home_heading: event.target.value })}
                     required
+                  />
+                </label>
+                <label>
+                  Manager registration invite code
+                  <input
+                    type="text"
+                    value={siteSettingsForm.manager_registration_code}
+                    onChange={(event) => setSiteSettingsForm({ ...siteSettingsForm, manager_registration_code: event.target.value })}
+                    placeholder="Leave blank to disable manager self-registration"
+                  />
+                </label>
+                <label>
+                  Class password reset code
+                  <input
+                    type="text"
+                    value={siteSettingsForm.password_reset_code}
+                    onChange={(event) => setSiteSettingsForm({ ...siteSettingsForm, password_reset_code: event.target.value })}
+                    placeholder="Shared temporary code for password recovery"
                   />
                 </label>
                 {siteSettingsForm.vote_categories.map((category, index) => (
@@ -676,8 +705,12 @@ export default function DashboardPage() {
             Published
           </label>
           <div className="inline-actions">
-            <button type="submit" className="primary-button">
-              {projectForm.id ? 'Save changes' : 'Create project'}
+            <button type="submit" className="primary-button" disabled={imageUploading}>
+              {imageUploading
+                ? 'Uploading image...'
+                : projectForm.id
+                  ? 'Save changes'
+                  : 'Create project'}
             </button>
             {projectForm.id ? (
               <button
@@ -706,9 +739,9 @@ export default function DashboardPage() {
           {projects.map((project) => (
             <div key={project.id} className="dashboard-list__item">
               <div>
-                <strong>{project.title}</strong>
+                <strong>#{project.id} {project.title}</strong>
                 <p>
-                  {project.student_name} • {project.semester_name} • {project.like_count} likes
+                  {project.student_name} • {project.semester_name} (ID {project.semester_id}) • {project.is_published ? 'Published' : 'Draft'} • {project.like_count} likes
                 </p>
               </div>
               <div className="inline-actions">

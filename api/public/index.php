@@ -1,5 +1,14 @@
 <?php
 
+header('Access-Control-Allow-Origin: https://va.tech.purdue.edu');
+header('Access-Control-Allow-Headers: Content-Type, Authorization');
+header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
+
+if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
+    http_response_code(204);
+    exit;
+}
+
 require_once dirname(__DIR__) . '/src/config/database.php';
 require_once dirname(__DIR__) . '/src/utils/response.php';
 require_once dirname(__DIR__) . '/src/controllers/auth.php';
@@ -11,15 +20,6 @@ require_once dirname(__DIR__) . '/src/controllers/semesters.php';
 require_once dirname(__DIR__) . '/src/controllers/users.php';
 require_once dirname(__DIR__) . '/src/controllers/projects.php';
 require_once dirname(__DIR__) . '/src/controllers/settings.php';
-
-header('Access-Control-Allow-Origin: *');
-header('Access-Control-Allow-Headers: Content-Type, Authorization');
-header('Access-Control-Allow-Methods: GET, POST, PUT, DELETE, OPTIONS');
-
-if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') {
-    http_response_code(204);
-    exit;
-}
 
 function send_uploaded_file($absolutePath)
 {
@@ -66,9 +66,10 @@ if ($path === '' || $path === false) {
 
 $method = $_SERVER['REQUEST_METHOD'];
 
-if ($method === 'GET' && preg_match('#^/uploads/projects/([a-zA-Z0-9._-]+)$#', $path, $matches)) {
+if ($method === 'GET' && preg_match('#^/uploads/([a-zA-Z0-9._-]+)$#', $path, $matches)) {
     $uploadFileName = $matches[1];
     $uploadsRoots = array(
+        dirname(__DIR__, 2) . '/uploads',
         dirname(__DIR__) . '/public/uploads/projects',
         dirname(__DIR__) . '/uploads/projects',
     );
@@ -97,6 +98,22 @@ if ($method === 'POST' && $path === '/auth/bootstrap-admin') {
 
 if ($method === 'POST' && $path === '/auth/login') {
     auth_login();
+}
+
+if ($method === 'POST' && $path === '/auth/register') {
+    auth_register();
+}
+
+if ($method === 'POST' && $path === '/auth/change-password') {
+    auth_change_password();
+}
+
+if ($method === 'POST' && $path === '/auth/forgot-password') {
+    auth_forgot_password();
+}
+
+if ($method === 'POST' && $path === '/auth/reset-password') {
+    auth_reset_password();
 }
 
 if ($method === 'GET' && $path === '/auth/me') {
